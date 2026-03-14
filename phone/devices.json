@@ -1,0 +1,115 @@
+[
+  {
+    "short_name": "ferri",
+    "match_strings": ["Ferri"],
+    "capabilities": {
+      "vibrate": "external clitoral vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Small wearable. Intense even at low settings."
+  },
+  {
+    "short_name": "lush",
+    "match_strings": ["Lush"],
+    "capabilities": {
+      "vibrate": "internal egg vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Insertable egg. Strong deep vibration."
+  },
+  {
+    "short_name": "gravity",
+    "match_strings": ["Gravity"],
+    "capabilities": {
+      "vibrate": "shaft vibration",
+      "oscillate": "thrusting motion"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Vibration + thrusting. Use 0.05+ intensity for slow strokes."
+  },
+  {
+    "short_name": "enigma",
+    "match_strings": ["Enigma"],
+    "capabilities": {
+      "vibrate": "G-spot thumping stimulation",
+      "rotate": "clitoral sonic pulse"
+    },
+    "intensity_floor": 0.4,
+    "notes": "Dual stimulation. 'rotate' = sonic pulse, NOT rotation. Needs 40%+ to feel."
+  },
+  {
+    "short_name": "max",
+    "match_strings": ["Max"],
+    "capabilities": {
+      "vibrate": "internal vibration",
+      "constrict": "air pump compression"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Vibration + air pump constriction. Constrict controls squeeze pressure."
+  },
+  {
+    "short_name": "nora",
+    "match_strings": ["Nora"],
+    "capabilities": {
+      "vibrate": "internal vibration",
+      "rotate": "internal rotation"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Vibration + actual physical rotation (unlike Enigma)."
+  },
+  {
+    "short_name": "edge",
+    "match_strings": ["Edge"],
+    "capabilities": {
+      "vibrate": "dual motor vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Prostate massager. Two independent vibration motors."
+  },
+  {
+    "short_name": "hush",
+    "match_strings": ["Hush"],
+    "capabilities": {
+      "vibrate": "vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Vibrating plug. Simple single-motor vibration."
+  },
+  {
+    "short_name": "domi",
+    "match_strings": ["Domi"],
+    "capabilities": {
+      "vibrate": "powerful wand vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Mini wand. Very powerful. Start low."
+  },
+  {
+    "short_name": "osci",
+    "match_strings": ["Osci"],
+    "capabilities": {
+      "oscillate": "oscillating stimulation"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Oscillating G-spot stimulator. Uses oscillate, not vibrate."
+  },
+  {
+    "short_name": "dolce",
+    "match_strings": ["Dolce"],
+    "capabilities": {
+      "vibrate": "dual vibration"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Couples' vibrator. Dual motors."
+  },
+  {
+    "short_name": "flexer",
+    "match_strings": ["Flexer"],
+    "capabilities": {
+      "vibrate": "vibration",
+      "oscillate": "come-hither motion"
+    },
+    "intensity_floor": 0.0,
+    "notes": "Vibration + finger-like come-hither oscillation pattern."
+  }
+]

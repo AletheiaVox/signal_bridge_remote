@@ -1,0 +1,7 @@
+# Signal Bridge Remote — Server Dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+bcrypt>=4.1.0
+PyJWT>=2.8.0
+python-dotenv>=1.0.0

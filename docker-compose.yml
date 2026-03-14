@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  signal-bridge:
+    build: .
+    ports:
+      - "8420:8420"
+    volumes:
+      - sb_data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  sb_data:
