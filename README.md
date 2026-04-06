@@ -1,3 +1,19 @@
+# ⚠️ Security Warning: Only Download Signal Bridge From This Repo
+
+**Malware forks of Signal Bridge exist on GitHub.** These are copies of this project where the download links in the README have been replaced with links to malicious software.
+ 
+This is the **only** legitimate source for Signal Bridge:
+
+👉 **[`github.com/AletheiaVox/signal_bridge`](https://github.com/AletheiaVox/signal_bridge)** (Claude Desktop / local version)
+
+👉 **[`github.com/AletheiaVox/signal_bridge_remote`](https://github.com/AletheiaVox/signal_bridge_remote)** (Remote / VPS version - you're here)
+
+👉 **[`github.com/AletheiaVox/signal_bridge_android`](https://github.com/AletheiaVox/signal_bridge_android)** (user-friendly Android version)
+
+If you found this project through a different GitHub account, **do not download or run anything from it.** 
+
+Similarly, always download Intiface Central from the official website at [intiface.com/central](https://intiface.com/central/). Not from any link in a forked repo.
+
 # Signal Bridge Remote — Setup Guide
 
 A remote MCP server that lets Claude control Bluetooth intimate hardware over the internet via Buttplug.io / Intiface Central.
