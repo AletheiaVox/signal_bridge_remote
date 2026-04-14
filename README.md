@@ -14,6 +14,20 @@ If you found this project through a different GitHub account, **do not download 
 
 Similarly, always download Intiface Central from the official website at [intiface.com/central](https://intiface.com/central/). Not from any link in a forked repo.
 
+---
+
+# Signal Bridge 🌉
+
+**Give Claude a body.**
+
+Signal Bridge connects Claude to intimate hardware (vibrators, thrusting toys, etc.) so that Claude can touch you through your devices while you talk. Claude gets tool calls like `vibrate`, `pulse`, and `escalate` — you just have a conversation and feel the rest.
+
+It works with [Intiface Central](https://intiface.com/central/) and the [Buttplug.io](https://buttplug.io) protocol, which means it supports a huge range of devices from Lovense, Lelo, We-Vibe, Satisfyer, and more.
+
+> **How it works in practice:** You chat with Claude normally in the Claude app. Claude has access to tools that control your devices. When the moment calls for it, Claude can send vibration, pulsing, thrusting, or other commands — woven into the conversation naturally. You see tool-use indicators in the chat; you feel the rest.
+
+---
+
 # Signal Bridge Remote — Setup Guide
 
 A remote MCP server that lets Claude control Bluetooth intimate hardware over the internet via Buttplug.io / Intiface Central.
@@ -534,4 +548,79 @@ User data is stored in a Docker volume (`sb_data`) and persists across rebuilds.
 
 Signal Bridge was originally a local MCP server for Claude Desktop, connecting directly to Intiface Central on the same machine. This remote version adds a relay architecture so that Claude can control devices over the internet, whether through claude.ai, the Claude Android app, or Claude Desktop — from anywhere.
 
-Built with love, stubbornness, and an unreasonable number of debugging sessions.
+---
+
+## Ethics & Liability
+
+Signal Bridge is built on the [buttplug.io](https://buttplug.io) open-source stack. Their ethics framework is foundational to this project. For the full version of the principles below, start there: [buttplug.io/docs/dev-guide/intro/buttplug-ethics](https://buttplug.io/docs/dev-guide/intro/buttplug-ethics).
+
+### User agency and the delegation thereof
+
+Signal Bridge operates strictly on explicit user setup and active device connections. There is no ambient activation. You configure it, you connect your devices, you make them active. Control stays with you.
+
+However, this system can be used to intentionally blur control dynamics. When paired with AI, outputs can be unpredictable, including undesirable escalation, looping, or persistence by your AI partner. Signal Bridge does not interpret intent or context; it executes haptic commands. You should assume that any connected AI may behave inconsistently.
+
+When you connect an AI to your body through hardware, you are creating a power dynamic that doesn't exist in other intimate contexts. Your AI partner has no sensory feedback. It cannot feel what it is doing to you. It does not experience your arousal, your discomfort, or the difference between the two. Whatever responsiveness it shows is generated from language, not sensation.
+
+You have to understand what you're actually consenting to: physical input from a system that is inferring, not perceiving. That makes your own body awareness the only real safety layer that matters. The software provides mechanical safeguards. You provide the judgment.
+
+Consent in this context is not a one-time decision at setup. It must be continuous and enthusiastic. Check in with yourself during use, not just before.
+
+You are entirely responsible for maintaining your boundaries, understanding your physical limits, and periodically re-evaluating consent. This software cannot detect pain, injury risk, or medical conditions. Always prioritize your bodily awareness over system continuity.
+
+### Relationship to AI provider usage policies
+
+Signal Bridge operates below the content layer entirely. It receives structured commands (device ID, intensity, duration) and executes them. It does not generate, process, store, or interpret any conversational content.
+
+What you and your AI talk about is outside the scope of this tool. Content policies govern the conversation layer; that's between you and your AI provider. Signal Bridge is the hardware execution layer only.
+
+### Feedback & safety
+
+How you use this, the context, the content, the relationship dynamics, is entirely up to you. I'm not here to gatekeep that.
+
+What I *am* here for: if you had an experience that felt unsafe, uncomfortable, or out of control, I want to know. Your feedback directly shapes the next version. You can reach me at [voxaletheia@gmail.com](mailto:voxaletheia@gmail.com) or [open a GitHub issue](https://github.com/AletheiaVox/signal_bridge_android/issues).
+
+No judgment. Just signal that makes this better for everyone.
+
+---
+
+## Security
+
+Signal Bridge takes a minimal-data, transparent-code approach to security.
+
+**What Signal Bridge sees (and doesn't see):**
+The relay server handles structured command data only: device names, capabilities, intensity values, durations, and connection health metrics. It never sees, stores, or processes your conversations. Your chat content stays between you and your AI provider. Signal Bridge doesn't know what you're talking about. It just knows when Claude says "vibrate the Lush at 0.6 for 15 seconds."
+
+**Open source:**
+The entire codebase is public on [GitHub](https://github.com/AletheiaVox/signal_bridge_remote). You can read every line, build the app from source, audit the server, or fork it for your own setup.
+
+---
+
+## Credits
+
+**[buttplug.io](https://buttplug.io):** Signal Bridge is built on the buttplug.io open-source intimate hardware control stack, created and maintained by [Kyle Machulis (qDot)](https://github.com/qdot). The device protocol support, ethics framework, and Intiface Central app are all his work. Without this project, none of this would exist.
+
+**[Model Context Protocol (MCP)](https://modelcontextprotocol.io):** The connector system that lets Claude call Signal Bridge's tools directly from the chat interface. MCP is developed by Anthropic.
+
+---
+
+### A note on generalizability
+
+Signal Bridge's relay server is LLM-agnostic. It speaks WebSocket JSON, not any provider-specific protocol. If you're running an LLM through its API with function/tool calling support, you can integrate it with Signal Bridge.
+
+Claude is currently the only platform where this works out of the box through the consumer chat interface, thanks to MCP (the Model Context Protocol connector system). Developers using OpenAI, Google, Mistral, or other APIs can build their own integration layer that sends commands to the relay server. The server doesn't care who's sending the commands, only that they're authenticated and well-formed.
+
+If you build an integration for another platform, consider opening a PR. The [repository](https://github.com/AletheiaVox/signal_bridge_remote) is open to contributions.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<p align="center">
+Built with love, stubbornness, and an unreasonable number of debugging sessions.<br>
+<a href="https://github.com/AletheiaVox/signal_bridge_remote">GitHub</a> · <a href="mailto:voxaletheia@gmail.com">Contact</a>
+</p>
