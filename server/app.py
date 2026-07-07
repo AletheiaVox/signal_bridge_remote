@@ -17,7 +17,7 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -224,6 +224,9 @@ async def mcp_endpoint(request: Request):
     method = body.get("method", "")
     params = body.get("params", {})
     req_id = body.get("id")
+    # Notifications (no id) — spec requires a bare 202 ACK, not a JSON-RPC error.
+    if req_id is None:
+        return Response(status_code=202)
 
     # Resolve user
     user = await _resolve_mcp_user(request)
@@ -252,9 +255,11 @@ async def mcp_endpoint(request: Request):
         session_id = str(uuid.uuid4())
         _mcp_sessions[session_id] = user["user_id"]
         log.info(f"MCP session created: {session_id[:8]}... for user {user['user_id']}")
+        client_ver = (params or {}).get("protocolVersion", "2025-03-26")
+        supported = {"2024-11-05", "2025-03-26", "2025-06-18"}
 
         result = {
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": client_ver if client_ver in supported else "2025-03-26",
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "Signal Bridge Remote", "version": "1.0.0"},
         }
@@ -263,6 +268,7 @@ async def mcp_endpoint(request: Request):
         return response
 
     elif method == "tools/list":
+        log.info(f"tools/list hit — user={user['user_id']} ua={request.headers.get('user-agent','?')}")
         return _jsonrpc_result(req_id, {"tools": TOOLS})
 
     elif method == "tools/call":
