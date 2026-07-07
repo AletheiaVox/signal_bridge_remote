@@ -26,7 +26,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -149,6 +149,14 @@ class DeviceController:
         for dev in self.client.devices.values():
             profile = self._match_profile(dev.name)
             available = self._detect_outputs(dev)
+            # Two devices of the same model would otherwise collide on the
+            # short name, silently hiding one of them — suffix duplicates
+            # (lush, lush_2, …) so both stay addressable.
+            if profile.short_name in self.devices:
+                n = 2
+                while f"{profile.short_name}_{n}" in self.devices:
+                    n += 1
+                profile = replace(profile, short_name=f"{profile.short_name}_{n}")
             cd = ConnectedDevice(
                 buttplug_id=dev.index,
                 buttplug_device=dev,
@@ -288,10 +296,14 @@ class DeviceController:
             if err:
                 return self._ack(False, err, request_id)
 
-            task_key = f"{cd.profile.short_name}:{pattern}"
-            # Cancel existing pattern on this device
-            if task_key in self._pattern_tasks:
-                self._pattern_tasks[task_key].cancel()
+            # One pattern per device, matching the Android relay engine:
+            # starting any pattern cancels whatever pattern was running on
+            # this device (keying by device:pattern let e.g. a wave and a
+            # pulse fight over the same actuator).
+            task_key = cd.profile.short_name
+            old_task = self._pattern_tasks.pop(task_key, None)
+            if old_task:
+                old_task.cancel()
 
             if pattern == "pulse":
                 task = asyncio.create_task(
@@ -326,10 +338,10 @@ class DeviceController:
             fallback_stop = True
             targets = list(self.devices.values())
 
-        # Cancel relevant pattern tasks
+        # Cancel relevant pattern tasks (keys are device short names)
         for key, task in list(self._pattern_tasks.items()):
             if device_name == "all" or fallback_stop or any(
-                cd.profile.short_name in key for cd in targets
+                cd.profile.short_name == key for cd in targets
             ):
                 task.cancel()
                 del self._pattern_tasks[key]
@@ -398,10 +410,14 @@ class DeviceController:
 
     async def _run_pulse(self, cd: ConnectedDevice, otype, intensity: float, duration: float, feature_index: Optional[int] = None):
         try:
-            start = time.time()
+            # time.monotonic, not time.time: wall clock jumps on NTP sync,
+            # which would stretch or truncate the pattern window.
+            start = time.monotonic()
             floor = cd.profile.intensity_floor
             adj = self._apply_floor(intensity, floor)
-            while time.time() - start < duration:
+            # duration <= 0 = run indefinitely until an explicit stop cancels
+            # this task, matching how plain commands treat duration=0.
+            while duration <= 0 or time.monotonic() - start < duration:
                 await self._write_output(cd, otype, adj, feature_index)
                 await asyncio.sleep(0.5)
                 await self._write_output(cd, otype, 0, feature_index)
@@ -416,10 +432,11 @@ class DeviceController:
 
     async def _run_wave(self, cd: ConnectedDevice, otype, intensity: float, duration: float, feature_index: Optional[int] = None):
         try:
-            start = time.time()
+            start = time.monotonic()
             floor = cd.profile.intensity_floor
-            while time.time() - start < duration:
-                elapsed = time.time() - start
+            # duration <= 0 = run indefinitely until an explicit stop cancels this task.
+            while duration <= 0 or time.monotonic() - start < duration:
+                elapsed = time.monotonic() - start
                 # Raw sine: 0.0 to 1.0
                 raw = (math.sin(elapsed * 2.0) + 1.0) / 2.0 * intensity
                 # Map smoothly above the floor: floor..intensity (never drops below floor)
@@ -456,12 +473,20 @@ class DeviceController:
                     adj = self._apply_floor(val, floor)
                 await self._write_output(cd, otype, adj, feature_index)
                 await asyncio.sleep(duration / steps)
-            # At peak now. hold_seconds: 0 = hold indefinitely, >0 = hold then stop
+            # At peak now. hold_seconds > 0 = hold at peak then stop (via the
+            # finally below); <= 0 = stay at peak until an explicit stop
+            # cancels this task. Without the indefinite wait the finally would
+            # stop the device the moment the ramp tops out.
             if hold_seconds > 0:
                 await asyncio.sleep(hold_seconds)
-                await cd.buttplug_device.stop()
-            # else: stay at peak until explicit stop command
+            else:
+                await asyncio.Event().wait()  # suspend until cancelled
         except asyncio.CancelledError:
+            pass
+        finally:
+            # Same finally treatment as pulse/wave: an unexpected error
+            # mid-ramp must not leave the device running at the last
+            # intensity it reached.
             try:
                 await cd.buttplug_device.stop()
             except Exception:
@@ -609,17 +634,9 @@ class RelayAgent:
 
             log.info("Authenticated with server!")
 
-            # Send current device list immediately — no need to wait for server scan
-            # (we already scanned during controller.connect())
-            if self.controller.devices:
-                device_list = self.controller.get_device_list()
-                await ws.send(json.dumps({
-                    "type": "device_list",
-                    "devices": device_list,
-                }))
-                log.info(f"Sent device list to server: {len(device_list)} device(s)")
-            else:
-                log.warning("No devices to report — was the initial scan empty?")
+            # No unsolicited device_list here: the server requests a scan
+            # right after phone_auth, and the scan handler below reports the
+            # device list in response.
 
             # Message loop
             async for raw in ws:
@@ -658,7 +675,6 @@ class RelayAgent:
                     "type": "device_list",
                     "devices": device_list,
                 }))
-                log.info(f"Scan complete — sent device list: {len(device_list)} device(s)")
 
         else:
             log.debug(f"Unknown server message type: {msg_type}")

@@ -138,6 +138,17 @@ class ButtplugRaw:
                 break
         if not short_name:
             short_name = bp_name.lower().replace(" ", "_")
+        # Two devices of the same model would otherwise collide on the short
+        # name, silently hiding one — suffix duplicates (lush, lush_2, …).
+        if short_name in self.name_map:
+            base = short_name
+            n = 2
+            while f"{base}_{n}" in self.name_map:
+                n += 1
+            short_name = f"{base}_{n}"
+            # Alias the profile so intensity floors still apply to the twin
+            if base in self.profiles:
+                self.profiles[short_name] = self.profiles[base]
         self.name_map[short_name] = idx
         log.info(f"Device: {bp_name} -> '{short_name}' (index {idx})")
 
@@ -354,9 +365,13 @@ class PatternRunner:
 
     async def _run_pulse(self, idx, output_type, intensity, duration, floor, feature_index=None):
         try:
-            start = time.time()
+            # time.monotonic, not time.time: wall clock jumps on NTP sync,
+            # which would stretch or truncate the pattern window.
+            start = time.monotonic()
             on = True
-            while time.time() - start < duration:
+            # duration <= 0 = run indefinitely until an explicit stop cancels
+            # this task, matching how plain commands treat duration=0.
+            while duration <= 0 or time.monotonic() - start < duration:
                 if on:
                     adj = self._floor(intensity, floor)
                     await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
@@ -374,9 +389,10 @@ class PatternRunner:
 
     async def _run_wave(self, idx, output_type, intensity, duration, floor, feature_index=None):
         try:
-            start = time.time()
-            while time.time() - start < duration:
-                elapsed = time.time() - start
+            start = time.monotonic()
+            # duration <= 0 = run indefinitely until an explicit stop cancels this task.
+            while duration <= 0 or time.monotonic() - start < duration:
+                elapsed = time.monotonic() - start
                 raw = (math.sin(elapsed * 2.0) + 1.0) / 2.0 * intensity
                 adj = self._floor(raw, floor)
                 await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
@@ -397,10 +413,20 @@ class PatternRunner:
                 adj = self._floor(val, floor)
                 await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
                 await asyncio.sleep(duration / steps)
+            # At peak now. hold > 0 = hold at peak then stop (via the finally
+            # below); <= 0 = stay at peak until an explicit stop cancels this
+            # task. Without the indefinite wait the finally would stop the
+            # device the moment the ramp tops out.
             if hold > 0:
                 await asyncio.sleep(hold)
-                await self.bp.stop_device(idx)
+            else:
+                await asyncio.Event().wait()  # suspend until cancelled
         except asyncio.CancelledError:
+            pass
+        finally:
+            # Same finally treatment as _run_pulse/_run_wave: an unexpected
+            # error mid-ramp must not leave the device running at the last
+            # intensity it reached.
             try:
                 await self.bp.stop_device(idx)
             except Exception:
@@ -442,11 +468,9 @@ async def relay_loop(server_url, token, intiface_url):
 
                 log.info("Authenticated with server!")
 
-                if device_list:
-                    await ws.send(json.dumps({"type": "device_list", "devices": device_list}))
-                    log.info(f"Sent device list: {len(device_list)} device(s)")
-                else:
-                    log.warning("No devices to report after scan")
+                # No unsolicited device_list here: the server requests a scan
+                # right after phone_auth, and the scan handler reports the
+                # device list in response.
 
                 async def process_command(msg, msg_type):
                     """Handle a command in the background so heartbeats stay responsive."""
