@@ -1,0 +1,15 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Secrets & runtime data — never commit
+.env
+*.db
+
+# Deploy bundles (built locally per the README, not distributed via git)
+*.tar.gz
+
+# Local working files kept out of the published repo
+README_old.md
+termux_relay.py
+termux_relay_v2.py
