@@ -67,6 +67,10 @@ def get_safety_config(user_id: str) -> dict:
                 "cooldown_threshold", "cooldown_exit", "cooldown_duration"):
         if row[key] is not None:
             result[key] = row[key]
+    # SQLite has no bool — coerce the int back to bool so the JSON response
+    # uses true/false. Strict Kotlin clients refuse to parse 0/1 as Boolean.
+    if "governor_enabled" in result:
+        result["governor_enabled"] = bool(result["governor_enabled"])
     return result
 
 
@@ -77,6 +81,11 @@ def set_safety_config(user_id: str, overrides: dict) -> dict:
         "cooldown_threshold", "cooldown_exit", "cooldown_duration",
     }
     filtered = {k: v for k, v in overrides.items() if k in allowed_keys}
+    # Normalise governor_enabled to a real 0/1 int — kotlinx-serialization on
+    # the Android side will reject a String "true" / "false" or a bare bool
+    # round-tripped through SQLite as anything other than int.
+    if "governor_enabled" in filtered:
+        filtered["governor_enabled"] = int(bool(filtered["governor_enabled"]))
 
     conn = _get_conn()
     existing = conn.execute(
