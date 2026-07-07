@@ -230,6 +230,8 @@ class PatternRunner:
     def __init__(self, bp):
         self.bp = bp
         self.active_tasks = {}
+        # Pending duration auto-stops: (short_name, output_type, feature_index) -> task
+        self.timed_stops = {}
 
     def _floor(self, raw, floor):
         if raw <= 0.01:
@@ -254,6 +256,37 @@ class PatternRunner:
             task = self.active_tasks.pop(device, None)
             if task:
                 task.cancel()
+
+    def cancel_timed_stops(self, device="all", output_type=None, feature_index=None):
+        """Cancel pending duration auto-stops.
+
+        With output_type=None every channel's auto-stop for the device is
+        cancelled (a pattern or stop takes over the whole device). With an
+        output_type, only auto-stops that overlap that channel are cancelled —
+        a feature_index of None on either side overlaps everything.
+        """
+        for key in list(self.timed_stops):
+            k_name, k_otype, k_feature = key
+            if device != "all" and k_name != device:
+                continue
+            if output_type is not None:
+                if k_otype != output_type:
+                    continue
+                if (k_feature is not None and feature_index is not None
+                        and k_feature != feature_index):
+                    continue
+            task = self.timed_stops.pop(key, None)
+            if task:
+                task.cancel()
+
+    async def _timed_stop(self, short_name, idx, output_type, duration, feature_index=None):
+        await asyncio.sleep(duration)
+        self.timed_stops.pop((short_name, output_type, feature_index), None)
+        try:
+            await self.bp.scalar_cmd(idx, 0.0, output_type, feature_index)
+            log.info(f"Auto-stopped {short_name} ({output_type}) after {duration}s")
+        except Exception:
+            pass
 
     async def run_command(self, cmd):
         msg_type = cmd.get("type", "")
@@ -290,17 +323,25 @@ class PatternRunner:
             floor = profile.get("intensity_floor", 0.0)
             adj = self._floor(intensity, floor)
             log.info(f"  {short_name}: raw={intensity} floor={floor} adjusted={adj}")
+
+            # A direct command supersedes whatever pattern is running on this
+            # device (otherwise the pattern loop keeps overwriting the new
+            # value), and replaces any pending auto-stop on this channel (a
+            # leftover auto-stop from an earlier command would silently kill
+            # this one partway through).
+            await self.cancel_patterns(short_name)
+            self.cancel_timed_stops(short_name, output_type, feature_index)
+
             await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
 
-        names = [t[0] for t in targets]
+            # Auto-stop after duration — tracked so later commands cancel it
+            if duration > 0:
+                key = (short_name, output_type, feature_index)
+                self.timed_stops[key] = asyncio.create_task(
+                    self._timed_stop(short_name, idx, output_type, duration, feature_index)
+                )
 
-        if duration > 0:
-            async def auto_stop():
-                await asyncio.sleep(duration)
-                for sn, ix in targets:
-                    await self.bp.stop_device(ix)
-                log.info(f"Auto-stopped after {duration}s")
-            asyncio.create_task(auto_stop())
+        names = [t[0] for t in targets]
 
         return self._ack(True, "Set " + output_type + " " + str(intensity) + " on " + ", ".join(names), request_id, names)
 
@@ -319,6 +360,9 @@ class PatternRunner:
 
         for short_name, idx in targets:
             await self.cancel_patterns(short_name)
+            # Pending duration auto-stops would fire mid-pattern and zero the
+            # channel the pattern is driving.
+            self.cancel_timed_stops(short_name)
             profile = self.bp.profiles.get(short_name, {})
             floor = profile.get("intensity_floor", 0.0)
 
@@ -346,6 +390,7 @@ class PatternRunner:
 
         for short_name, idx in targets:
             await self.cancel_patterns(short_name)
+            self.cancel_timed_stops(short_name)
             await self.bp.stop_device(idx)
 
         if fallback:
@@ -355,6 +400,7 @@ class PatternRunner:
         if device == "all":
             await self.bp.stop_all()
             self.active_tasks.clear()
+            self.cancel_timed_stops("all")
 
         names = [t[0] for t in targets]
         return self._ack(True, "Stopped " + (", ".join(names) if names else "all"), request_id, names)

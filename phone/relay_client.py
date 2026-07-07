@@ -109,7 +109,9 @@ class DeviceController:
         self.profiles = profiles or []
         self.client: Optional[ButtplugClient] = None
         self.devices: dict[str, ConnectedDevice] = {}  # short_name → device
-        self._pattern_tasks: dict[str, asyncio.Task] = {}
+        self._pattern_tasks: dict[str, asyncio.Task] = {}  # short_name → task
+        # Pending duration auto-stops: (short_name, otype, feature_index) → task
+        self._timed_stops: dict[tuple, asyncio.Task] = {}
         self._connected = False
 
     async def connect(self):
@@ -255,14 +257,26 @@ class DeviceController:
             err = self._check_feature(cd, otype, feature_index)
             if err:
                 return self._ack(False, err, request_id)
+
+            # A direct command supersedes whatever pattern is running on this
+            # device (otherwise the pattern loop keeps overwriting the new
+            # value), and replaces any pending auto-stop on this channel (a
+            # leftover auto-stop from an earlier command would silently kill
+            # this one partway through).
+            self._cancel_pattern(cd.profile.short_name)
+            self._cancel_timed_stops(cd.profile.short_name, otype, feature_index)
+
             try:
                 await self._write_output(cd, otype, adj_intensity, feature_index)
             except Exception as e:
                 return self._ack(False, f"Device error ({cd.profile.short_name}): {e}", request_id)
 
-            # Auto-stop after duration
+            # Auto-stop after duration — tracked so later commands cancel it
             if duration > 0:
-                asyncio.create_task(self._timed_stop(cd, otype, duration, feature_index))
+                key = (cd.profile.short_name, otype, feature_index)
+                self._timed_stops[key] = asyncio.create_task(
+                    self._timed_stop(cd, otype, duration, feature_index)
+                )
 
         names = ", ".join(cd.profile.short_name for cd in targets)
         return self._ack(
@@ -299,11 +313,11 @@ class DeviceController:
             # One pattern per device, matching the Android relay engine:
             # starting any pattern cancels whatever pattern was running on
             # this device (keying by device:pattern let e.g. a wave and a
-            # pulse fight over the same actuator).
+            # pulse fight over the same actuator), plus any pending
+            # duration auto-stops that would fire mid-pattern.
             task_key = cd.profile.short_name
-            old_task = self._pattern_tasks.pop(task_key, None)
-            if old_task:
-                old_task.cancel()
+            self._cancel_pattern(task_key)
+            self._cancel_timed_stops(task_key)
 
             if pattern == "pulse":
                 task = asyncio.create_task(
@@ -347,6 +361,9 @@ class DeviceController:
                 del self._pattern_tasks[key]
 
         for cd in targets:
+            # A pending duration auto-stop must not fire after this stop —
+            # it could zero a channel a later command has since restarted.
+            self._cancel_timed_stops(cd.profile.short_name)
             try:
                 await cd.buttplug_device.stop()
             except Exception:
@@ -523,8 +540,37 @@ class DeviceController:
             )
         return None
 
+    def _cancel_pattern(self, short_name: str):
+        """Cancel the running pattern task on a device, if any."""
+        old = self._pattern_tasks.pop(short_name, None)
+        if old:
+            old.cancel()
+
+    def _cancel_timed_stops(self, short_name: str, otype=None, feature_index: Optional[int] = None):
+        """Cancel pending duration auto-stops for a device.
+
+        With otype=None every channel's auto-stop is cancelled (a pattern or
+        stop takes over the whole device). With an otype, only auto-stops
+        that overlap that channel are cancelled — a feature_index of None on
+        either side overlaps everything on the channel.
+        """
+        for key in list(self._timed_stops):
+            k_name, k_otype, k_feature = key
+            if k_name != short_name:
+                continue
+            if otype is not None:
+                if k_otype != otype:
+                    continue
+                if (k_feature is not None and feature_index is not None
+                        and k_feature != feature_index):
+                    continue
+            task = self._timed_stops.pop(key, None)
+            if task:
+                task.cancel()
+
     async def _timed_stop(self, cd: ConnectedDevice, otype, duration: float, feature_index: Optional[int] = None):
         await asyncio.sleep(duration)
+        self._timed_stops.pop((cd.profile.short_name, otype, feature_index), None)
         try:
             await self._write_output(cd, otype, 0, feature_index)
         except Exception:
@@ -564,10 +610,13 @@ class DeviceController:
                 await cd.buttplug_device.stop()
             except Exception:
                 pass
-        # Cancel all patterns
+        # Cancel all patterns and pending auto-stops
         for task in self._pattern_tasks.values():
             task.cancel()
         self._pattern_tasks.clear()
+        for task in self._timed_stops.values():
+            task.cancel()
+        self._timed_stops.clear()
 
 
 # ════════════════════════════════════════════════════════════════════════
