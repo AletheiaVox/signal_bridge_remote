@@ -164,18 +164,27 @@ class ButtplugRaw:
             })
         return result
 
-    async def scalar_cmd(self, idx, intensity, actuator_type="Vibrate"):
+    async def scalar_cmd(self, idx, intensity, actuator_type="Vibrate", feature_index=None):
         bp_dev = self.bp_devices.get(idx, {})
         scalars = []
+        # Find matching actuators, optionally filtered by feature index
+        # (multi-motor devices like the Edge or Dolce)
         for i, feature in enumerate(bp_dev.get("DeviceMessages", {}).get("ScalarCmd", [])):
             if feature.get("ActuatorType", "").lower() == actuator_type.lower():
+                if feature_index is not None and i != feature_index:
+                    continue
                 scalars.append({
                     "Index": i,
                     "Scalar": max(0.0, min(1.0, intensity)),
                     "ActuatorType": feature["ActuatorType"],
                 })
+        # Fallback: if no matching actuator found, use requested index (or 0)
         if not scalars:
-            scalars = [{"Index": 0, "Scalar": max(0.0, min(1.0, intensity)), "ActuatorType": actuator_type}]
+            scalars = [{
+                "Index": feature_index if feature_index is not None else 0,
+                "Scalar": max(0.0, min(1.0, intensity)),
+                "ActuatorType": actuator_type,
+            }]
         await self._send([{
             "ScalarCmd": {
                 "Id": self._next_id(),
@@ -256,20 +265,21 @@ class PatternRunner:
         intensity = cmd.get("intensity", 0.5)
         output_type = cmd.get("action", cmd.get("output_type", "vibrate"))
         duration = cmd.get("duration", 0)
+        feature_index = cmd.get("feature_index")
         targets = self._resolve_targets(device)
 
         if not targets:
             available = list(self.bp.name_map.keys())
             return self._ack(False, f"Device not found. Available: {available}", request_id)
 
-        log.info(f"Command: {output_type} intensity={intensity} duration={duration} targets={[t[0] for t in targets]}")
+        log.info(f"Command: {output_type} intensity={intensity} duration={duration} feature_index={feature_index} targets={[t[0] for t in targets]}")
 
         for short_name, idx in targets:
             profile = self.bp.profiles.get(short_name, {})
             floor = profile.get("intensity_floor", 0.0)
             adj = self._floor(intensity, floor)
             log.info(f"  {short_name}: raw={intensity} floor={floor} adjusted={adj}")
-            await self.bp.scalar_cmd(idx, adj, output_type)
+            await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
 
         names = [t[0] for t in targets]
 
@@ -290,6 +300,7 @@ class PatternRunner:
         duration = cmd.get("duration", 10.0)
         output_type = cmd.get("action", cmd.get("output_type", "vibrate"))
         hold = cmd.get("hold_seconds", 0.0)
+        feature_index = cmd.get("feature_index")
         targets = self._resolve_targets(device)
 
         if not targets:
@@ -301,11 +312,11 @@ class PatternRunner:
             floor = profile.get("intensity_floor", 0.0)
 
             if pattern == "pulse":
-                task = asyncio.create_task(self._run_pulse(idx, output_type, intensity, duration, floor))
+                task = asyncio.create_task(self._run_pulse(idx, output_type, intensity, duration, floor, feature_index))
             elif pattern == "wave":
-                task = asyncio.create_task(self._run_wave(idx, output_type, intensity, duration, floor))
+                task = asyncio.create_task(self._run_wave(idx, output_type, intensity, duration, floor, feature_index))
             elif pattern == "escalate":
-                task = asyncio.create_task(self._run_escalate(idx, output_type, intensity, duration, hold, floor))
+                task = asyncio.create_task(self._run_escalate(idx, output_type, intensity, duration, hold, floor, feature_index))
             else:
                 return self._ack(False, "Unknown pattern: " + pattern, request_id)
             self.active_tasks[short_name] = task
@@ -341,16 +352,16 @@ class PatternRunner:
         await self.bp.scan(duration=5.0)
         return self._ack(True, "Scan complete - " + str(len(self.bp.bp_devices)) + " device(s)", request_id)
 
-    async def _run_pulse(self, idx, output_type, intensity, duration, floor):
+    async def _run_pulse(self, idx, output_type, intensity, duration, floor, feature_index=None):
         try:
             start = time.time()
             on = True
             while time.time() - start < duration:
                 if on:
                     adj = self._floor(intensity, floor)
-                    await self.bp.scalar_cmd(idx, adj, output_type)
+                    await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
                 else:
-                    await self.bp.scalar_cmd(idx, 0.0, output_type)
+                    await self.bp.scalar_cmd(idx, 0.0, output_type, feature_index)
                 on = not on
                 await asyncio.sleep(0.4)
         except asyncio.CancelledError:
@@ -361,14 +372,14 @@ class PatternRunner:
             except Exception:
                 pass
 
-    async def _run_wave(self, idx, output_type, intensity, duration, floor):
+    async def _run_wave(self, idx, output_type, intensity, duration, floor, feature_index=None):
         try:
             start = time.time()
             while time.time() - start < duration:
                 elapsed = time.time() - start
                 raw = (math.sin(elapsed * 2.0) + 1.0) / 2.0 * intensity
                 adj = self._floor(raw, floor)
-                await self.bp.scalar_cmd(idx, adj, output_type)
+                await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
@@ -378,13 +389,13 @@ class PatternRunner:
             except Exception:
                 pass
 
-    async def _run_escalate(self, idx, output_type, peak, duration, hold, floor):
+    async def _run_escalate(self, idx, output_type, peak, duration, hold, floor, feature_index=None):
         try:
             steps = 20
             for i in range(steps + 1):
                 val = (i / steps) * peak
                 adj = self._floor(val, floor)
-                await self.bp.scalar_cmd(idx, adj, output_type)
+                await self.bp.scalar_cmd(idx, adj, output_type, feature_index)
                 await asyncio.sleep(duration / steps)
             if hold > 0:
                 await asyncio.sleep(hold)

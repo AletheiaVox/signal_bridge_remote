@@ -232,6 +232,7 @@ class DeviceController:
         device_name = cmd.get("device", "all")
         intensity = cmd.get("intensity", 0.5)
         duration = cmd.get("duration", 0)
+        feature_index = cmd.get("feature_index")
 
         targets = self._resolve_targets(device_name)
         if not targets:
@@ -243,16 +244,17 @@ class DeviceController:
 
         for cd in targets:
             adj_intensity = self._apply_floor(intensity, cd.profile.intensity_floor)
+            err = self._check_feature(cd, otype, feature_index)
+            if err:
+                return self._ack(False, err, request_id)
             try:
-                await cd.buttplug_device.run_output(
-                    DeviceOutputCommand(otype, adj_intensity)
-                )
+                await self._write_output(cd, otype, adj_intensity, feature_index)
             except Exception as e:
                 return self._ack(False, f"Device error ({cd.profile.short_name}): {e}", request_id)
 
             # Auto-stop after duration
             if duration > 0:
-                asyncio.create_task(self._timed_stop(cd, otype, duration))
+                asyncio.create_task(self._timed_stop(cd, otype, duration, feature_index))
 
         names = ", ".join(cd.profile.short_name for cd in targets)
         return self._ack(
@@ -269,6 +271,7 @@ class DeviceController:
         device_name = cmd.get("device", "all")
         intensity = cmd.get("intensity", 0.6)
         duration = cmd.get("duration", 10)
+        feature_index = cmd.get("feature_index")
 
         targets = self._resolve_targets(device_name)
         if not targets:
@@ -279,6 +282,12 @@ class DeviceController:
             return self._ack(False, f"Unsupported output type: {output_type}", request_id)
 
         for cd in targets:
+            # Validate up front so a bad feature_index fails the ack instead
+            # of dying silently inside the pattern task.
+            err = self._check_feature(cd, otype, feature_index)
+            if err:
+                return self._ack(False, err, request_id)
+
             task_key = f"{cd.profile.short_name}:{pattern}"
             # Cancel existing pattern on this device
             if task_key in self._pattern_tasks:
@@ -286,16 +295,16 @@ class DeviceController:
 
             if pattern == "pulse":
                 task = asyncio.create_task(
-                    self._run_pulse(cd, otype, intensity, duration)
+                    self._run_pulse(cd, otype, intensity, duration, feature_index)
                 )
             elif pattern == "wave":
                 task = asyncio.create_task(
-                    self._run_wave(cd, otype, intensity, duration)
+                    self._run_wave(cd, otype, intensity, duration, feature_index)
                 )
             elif pattern == "escalate":
                 hold_seconds = cmd.get("hold_seconds", 0)
                 task = asyncio.create_task(
-                    self._run_escalate(cd, otype, intensity, duration, hold_seconds)
+                    self._run_escalate(cd, otype, intensity, duration, hold_seconds, feature_index)
                 )
             else:
                 return self._ack(False, f"Unknown pattern: {pattern}", request_id)
@@ -387,15 +396,15 @@ class DeviceController:
 
     # ── Pattern Runners ─────────────────────────────────────────────
 
-    async def _run_pulse(self, cd: ConnectedDevice, otype, intensity: float, duration: float):
+    async def _run_pulse(self, cd: ConnectedDevice, otype, intensity: float, duration: float, feature_index: Optional[int] = None):
         try:
             start = time.time()
             floor = cd.profile.intensity_floor
             adj = self._apply_floor(intensity, floor)
             while time.time() - start < duration:
-                await cd.buttplug_device.run_output(DeviceOutputCommand(otype, adj))
+                await self._write_output(cd, otype, adj, feature_index)
                 await asyncio.sleep(0.5)
-                await cd.buttplug_device.run_output(DeviceOutputCommand(otype, 0))
+                await self._write_output(cd, otype, 0, feature_index)
                 await asyncio.sleep(0.3)
         except asyncio.CancelledError:
             pass
@@ -405,7 +414,7 @@ class DeviceController:
             except Exception:
                 pass
 
-    async def _run_wave(self, cd: ConnectedDevice, otype, intensity: float, duration: float):
+    async def _run_wave(self, cd: ConnectedDevice, otype, intensity: float, duration: float, feature_index: Optional[int] = None):
         try:
             start = time.time()
             floor = cd.profile.intensity_floor
@@ -422,7 +431,7 @@ class DeviceController:
                     adj = min(1.0, adj)
                 else:
                     adj = min(1.0, raw)
-                await cd.buttplug_device.run_output(DeviceOutputCommand(otype, adj))
+                await self._write_output(cd, otype, adj, feature_index)
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
@@ -432,7 +441,7 @@ class DeviceController:
             except Exception:
                 pass
 
-    async def _run_escalate(self, cd: ConnectedDevice, otype, peak: float, duration: float, hold_seconds: float = 0):
+    async def _run_escalate(self, cd: ConnectedDevice, otype, peak: float, duration: float, hold_seconds: float = 0, feature_index: Optional[int] = None):
         try:
             steps = 20
             floor = cd.profile.intensity_floor
@@ -445,7 +454,7 @@ class DeviceController:
                     adj = min(1.0, adj)
                 else:
                     adj = self._apply_floor(val, floor)
-                await cd.buttplug_device.run_output(DeviceOutputCommand(otype, adj))
+                await self._write_output(cd, otype, adj, feature_index)
                 await asyncio.sleep(duration / steps)
             # At peak now. hold_seconds: 0 = hold indefinitely, >0 = hold then stop
             if hold_seconds > 0:
@@ -460,10 +469,39 @@ class DeviceController:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    async def _timed_stop(self, cd: ConnectedDevice, otype, duration: float):
+    async def _write_output(self, cd: ConnectedDevice, otype, value: float, feature_index: Optional[int] = None):
+        """Send an output value to a device — all features matching the output
+        type, or one specific feature when feature_index is given (multi-motor
+        devices like the Edge or Dolce)."""
+        if feature_index is None:
+            await cd.buttplug_device.run_output(DeviceOutputCommand(otype, value))
+            return
+        err = self._check_feature(cd, otype, feature_index)
+        if err:
+            raise ValueError(err)
+        feature = cd.buttplug_device.features[feature_index]
+        await feature.run_output(DeviceOutputCommand(otype, value))
+
+    def _check_feature(self, cd: ConnectedDevice, otype, feature_index: Optional[int]) -> Optional[str]:
+        """Return an error message if feature_index can't take this output, else None."""
+        if feature_index is None:
+            return None
+        feature = cd.buttplug_device.features.get(feature_index)
+        if feature is None or not feature.has_output(otype):
+            valid = [
+                i for i, f in cd.buttplug_device.features.items() if f.has_output(otype)
+            ]
+            oname = getattr(otype, "value", str(otype))
+            return (
+                f"feature_index {feature_index} has no {oname} output on "
+                f"{cd.profile.short_name} (valid: {valid if valid else 'none'})"
+            )
+        return None
+
+    async def _timed_stop(self, cd: ConnectedDevice, otype, duration: float, feature_index: Optional[int] = None):
         await asyncio.sleep(duration)
         try:
-            await cd.buttplug_device.run_output(DeviceOutputCommand(otype, 0))
+            await self._write_output(cd, otype, 0, feature_index)
         except Exception:
             pass
 

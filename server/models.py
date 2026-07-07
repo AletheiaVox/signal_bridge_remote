@@ -45,6 +45,7 @@ class DeviceCommand(BaseModel):
     device: str = "all"
     intensity: float = Field(0.5, ge=0.0, le=1.0)
     duration: float = Field(0.0, ge=0.0)  # 0 = indefinite
+    feature_index: Optional[int] = None  # target a specific actuator by index
 
 
 class PatternCommand(BaseModel):
@@ -56,6 +57,7 @@ class PatternCommand(BaseModel):
     intensity: float = Field(0.6, ge=0.0, le=1.0)
     duration: float = Field(10.0, ge=0.0)
     hold_seconds: float = Field(0.0, ge=0.0)  # escalate only: 0 = hold at peak indefinitely
+    feature_index: Optional[int] = None  # target a specific actuator by index
 
 
 class StopCommand(BaseModel):
