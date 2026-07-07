@@ -3,113 +3,113 @@
     "short_name": "ferri",
     "match_strings": ["Ferri"],
     "capabilities": {
-      "vibrate": "external clitoral vibration"
+      "vibrate": "compact eccentric-mass actuator, high response at low duty cycle"
     },
     "intensity_floor": 0.0,
-    "notes": "Small wearable. Intense even at low settings."
+    "notes": "Small form factor. High effective output at low values; recommend starting below 0.3."
   },
   {
     "short_name": "lush",
     "match_strings": ["Lush"],
     "capabilities": {
-      "vibrate": "internal egg vibration"
+      "vibrate": "single eccentric-mass actuator, low-frequency dominant"
     },
     "intensity_floor": 0.0,
-    "notes": "Insertable egg. Strong deep vibration."
+    "notes": "Compact ovoid form factor. High output efficiency at low command levels."
   },
   {
     "short_name": "gravity",
     "match_strings": ["Gravity"],
     "capabilities": {
-      "vibrate": "shaft vibration",
-      "oscillate": "thrusting motion"
+      "vibrate": "eccentric-mass actuator along main axis",
+      "oscillate": "linear reciprocating actuator; stroke rate scales with intensity"
     },
     "intensity_floor": 0.0,
-    "notes": "Vibration + thrusting. Use 0.05+ intensity for slow strokes."
+    "notes": "Dual-mode device. Oscillate requires intensity >= 0.05 to engage; low values map to slow cycle rate."
   },
   {
     "short_name": "enigma",
     "match_strings": ["Enigma"],
     "capabilities": {
-      "vibrate": "G-spot thumping stimulation",
-      "rotate": "clitoral sonic pulse"
+      "vibrate": "high-amplitude pulsed actuator (impact-style, not continuous waveform)",
+      "rotate": "sonic-frequency acoustic actuator (note: maps to acoustic output, NOT mechanical rotation)"
     },
     "intensity_floor": 0.4,
-    "notes": "Dual stimulation. 'rotate' = sonic pulse, NOT rotation. Needs 40%+ to feel."
+    "notes": "Two independent actuators. Threshold response: effective activation threshold ≈0.4. Rotate channel is acoustic, not rotational."
   },
   {
     "short_name": "max",
     "match_strings": ["Max"],
     "capabilities": {
-      "vibrate": "internal vibration",
-      "constrict": "air pump compression"
+      "vibrate": "eccentric-mass actuator",
+      "constrict": "pneumatic compression actuator; intensity maps to chamber pressure"
     },
     "intensity_floor": 0.0,
-    "notes": "Vibration + air pump constriction. Constrict controls squeeze pressure."
+    "notes": "Two independent actuators. Constrict is air-pump driven; intensity = compression force."
   },
   {
     "short_name": "nora",
     "match_strings": ["Nora"],
     "capabilities": {
-      "vibrate": "internal vibration",
-      "rotate": "internal rotation"
+      "vibrate": "eccentric-mass actuator",
+      "rotate": "rotational actuator"
     },
     "intensity_floor": 0.0,
-    "notes": "Vibration + actual physical rotation (unlike Enigma)."
+    "notes": "Two independent actuators. Rotate is mechanical, not acoustic."
   },
   {
     "short_name": "edge",
     "match_strings": ["Edge"],
     "capabilities": {
-      "vibrate": "dual motor vibration"
+      "vibrate": "two independent eccentric-mass actuators; address individually via feature_index"
     },
     "intensity_floor": 0.0,
-    "notes": "Prostate massager. Two independent vibration motors."
+    "notes": "Dual-actuator device. Use feature_index 0 or 1 to drive motors separately."
   },
   {
     "short_name": "hush",
     "match_strings": ["Hush"],
     "capabilities": {
-      "vibrate": "vibration"
+      "vibrate": "single eccentric-mass actuator"
     },
     "intensity_floor": 0.0,
-    "notes": "Vibrating plug. Simple single-motor vibration."
+    "notes": "Single-actuator device, no quirks."
   },
   {
     "short_name": "domi",
     "match_strings": ["Domi"],
     "capabilities": {
-      "vibrate": "powerful wand vibration"
+      "vibrate": "high-output eccentric-mass actuator, broad-spectrum"
     },
     "intensity_floor": 0.0,
-    "notes": "Mini wand. Very powerful. Start low."
+    "notes": "High maximum output relative to other devices in this set. Typical operating range: 0.05–0.30."
   },
   {
     "short_name": "osci",
     "match_strings": ["Osci"],
     "capabilities": {
-      "oscillate": "oscillating stimulation"
+      "oscillate": "linear reciprocating actuator (no vibrate channel)"
     },
     "intensity_floor": 0.0,
-    "notes": "Oscillating G-spot stimulator. Uses oscillate, not vibrate."
+    "notes": "Single-channel device. Responds only to oscillate, not vibrate."
   },
   {
     "short_name": "dolce",
     "match_strings": ["Dolce"],
     "capabilities": {
-      "vibrate": "dual vibration"
+      "vibrate": "two independent eccentric-mass actuators; address individually via feature_index"
     },
     "intensity_floor": 0.0,
-    "notes": "Couples' vibrator. Dual motors."
+    "notes": "Dual-actuator device. Use feature_index 0 or 1 to drive motors separately."
   },
   {
     "short_name": "flexer",
     "match_strings": ["Flexer"],
     "capabilities": {
-      "vibrate": "vibration",
-      "oscillate": "come-hither motion"
+      "vibrate": "eccentric-mass actuator",
+      "oscillate": "articulated curling actuator (pivots rather than reciprocates linearly)"
     },
     "intensity_floor": 0.0,
-    "notes": "Vibration + finger-like come-hither oscillation pattern."
+    "notes": "Two independent actuators. Oscillate uses curling articulation, not linear stroke."
   }
 ]
