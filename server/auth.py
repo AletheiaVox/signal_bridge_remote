@@ -24,7 +24,7 @@ from . import config
 # ════════════════════════════════════════════════════════════════════════
 
 def init_db():
-    """Create user table if it doesn't exist."""
+    """Create user and safety_config tables if they don't exist."""
     conn = sqlite3.connect(config.DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -35,8 +35,77 @@ def init_db():
             is_active INTEGER DEFAULT 1
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS safety_config (
+            user_id TEXT PRIMARY KEY REFERENCES users(id),
+            governor_enabled INTEGER DEFAULT 1,
+            heat_rate REAL DEFAULT NULL,
+            cool_rate REAL DEFAULT NULL,
+            cooldown_threshold REAL DEFAULT NULL,
+            cooldown_exit REAL DEFAULT NULL,
+            cooldown_duration REAL DEFAULT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def get_safety_config(user_id: str) -> dict:
+    """Get per-user safety config. Returns overrides only (NULLs omitted)."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM safety_config WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return {}
+
+    result = {}
+    for key in ("governor_enabled", "heat_rate", "cool_rate",
+                "cooldown_threshold", "cooldown_exit", "cooldown_duration"):
+        if row[key] is not None:
+            result[key] = row[key]
+    return result
+
+
+def set_safety_config(user_id: str, overrides: dict) -> dict:
+    """Set per-user safety config overrides. Returns the merged config."""
+    allowed_keys = {
+        "governor_enabled", "heat_rate", "cool_rate",
+        "cooldown_threshold", "cooldown_exit", "cooldown_duration",
+    }
+    filtered = {k: v for k, v in overrides.items() if k in allowed_keys}
+
+    conn = _get_conn()
+    existing = conn.execute(
+        "SELECT user_id FROM safety_config WHERE user_id = ?", (user_id,)
+    ).fetchone()
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    if existing:
+        # Update existing overrides
+        sets = ", ".join(f"{k} = ?" for k in filtered)
+        if sets:
+            conn.execute(
+                f"UPDATE safety_config SET {sets}, updated_at = ? WHERE user_id = ?",
+                (*filtered.values(), now, user_id),
+            )
+    else:
+        # Insert new row
+        cols = ", ".join(["user_id", "updated_at"] + list(filtered.keys()))
+        placeholders = ", ".join(["?"] * (2 + len(filtered)))
+        conn.execute(
+            f"INSERT INTO safety_config ({cols}) VALUES ({placeholders})",
+            (user_id, now, *filtered.values()),
+        )
+
+    conn.commit()
+    conn.close()
+
+    return get_safety_config(user_id)
 
 
 def _get_conn():

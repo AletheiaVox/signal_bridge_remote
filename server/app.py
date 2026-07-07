@@ -25,10 +25,14 @@ from . import config
 from .auth import (
     init_db, create_user, verify_user, create_token, verify_token,
     extract_token, ip_tracker, rate_limiter,
+    get_safety_config, set_safety_config,
 )
 from .mcp_tools import TOOLS, HANDLERS, current_user_id
+from .oauth import init_oauth_db
+from .oauth_routes import router as oauth_router
 from .relay_hub import check_ws_ip_limit, release_ws_ip_slot, get_ip_from_headers
 from .session_registry import registry
+from .governor import governor
 from .safety import dead_man_switch
 
 # ── Logging ─────────────────────────────────────────────────────────────
@@ -47,9 +51,11 @@ log = logging.getLogger("signal_bridge")
 async def lifespan(app: FastAPI):
     config.validate()
     init_db()
+    init_oauth_db()
     await dead_man_switch.start()
     log.info(f"Signal Bridge Remote started on {config.HOST}:{config.PORT}")
     log.info(f"Registration {'OPEN' if config.REGISTRATION_OPEN else 'CLOSED'}")
+    log.info(f"MCP auth {'REQUIRED' if config.REQUIRE_MCP_AUTH else 'optional (sole-phone fallback enabled)'}")
     yield
     await dead_man_switch.stop()
     log.info("Signal Bridge Remote shutting down")
@@ -68,6 +74,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount OAuth routes (metadata, registration, authorize, token)
+app.include_router(oauth_router)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -180,10 +189,12 @@ async def _resolve_mcp_user(request: Request) -> dict | None:
         return {"user_id": _mcp_sessions[session_id]}
 
     # 3. Fall back to sole active phone session (authless / claude.ai init)
-    fallback_user_id = await registry.get_sole_user_id()
-    if fallback_user_id:
-        log.info(f"MCP request without auth — using active session: {fallback_user_id}")
-        return {"user_id": fallback_user_id}
+    #    Disabled when SB_REQUIRE_MCP_AUTH=true (multi-user mode).
+    if not config.REQUIRE_MCP_AUTH:
+        fallback_user_id = await registry.get_sole_user_id()
+        if fallback_user_id:
+            log.info(f"MCP request without auth — using active session: {fallback_user_id}")
+            return {"user_id": fallback_user_id}
 
     return None
 
@@ -395,6 +406,10 @@ async def _handle_phone_ws(ws: WebSocket):
         wrapper = _FastAPIWSWrapper(ws)
         session = await registry.register(user_id, wrapper)
 
+        # Load per-user governor config from database
+        effective_config = _effective_safety_config(user_id)
+        governor.apply_user_config(user_id, effective_config)
+
         # Request device list (phone also sends proactively, but this is a backup)
         log.info(f"Requesting device scan from phone: user={user_id}")
         await ws.send_json({"type": "scan"})
@@ -417,6 +432,11 @@ async def _handle_phone_ws(ws: WebSocket):
                     )
                     if ack.request_id:
                         session.resolve_ack(ack.request_id, ack)
+                elif msg_type == "phone_emergency_stop":
+                    # Phone-initiated emergency stop (volume keys, etc.)
+                    # Tell the governor so heat stops accumulating
+                    governor.record_stop(user_id)
+                    log.warning(f"Phone emergency stop: user={user_id}")
                 elif msg_type == "device_list":
                     await registry.update_devices(user_id, msg.get("devices", []))
                     log.info(f"Devices updated: user={user_id}, count={len(msg.get('devices', []))}")
@@ -435,6 +455,7 @@ async def _handle_phone_ws(ws: WebSocket):
     finally:
         if user_id:
             await registry.unregister(user_id)
+            governor.remove_user(user_id)
             log.info(f"Phone disconnected: user={user_id}")
         await release_ws_ip_slot(ip)
 
@@ -464,6 +485,78 @@ class _FastAPIWSWrapper:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# Safety Config (per-user governor settings)
+# ════════════════════════════════════════════════════════════════════════
+
+def _effective_safety_config(user_id: str) -> dict:
+    """Merge per-user overrides with server defaults."""
+    defaults = {
+        "governor_enabled": config.GOVERNOR_ENABLED,
+        "heat_rate": config.GOVERNOR_HEAT_RATE,
+        "cool_rate": config.GOVERNOR_COOL_RATE,
+        "cooldown_threshold": config.GOVERNOR_COOLDOWN_THRESHOLD,
+        "cooldown_exit": config.GOVERNOR_COOLDOWN_EXIT,
+        "cooldown_duration": config.GOVERNOR_COOLDOWN_DURATION,
+    }
+    overrides = get_safety_config(user_id)
+    merged = {**defaults, **overrides}
+    return merged
+
+
+@app.get("/safety/config")
+async def get_safety_config_endpoint(request: Request):
+    """Get the effective safety config for the authenticated user."""
+    token = extract_token(request.headers.get("authorization", ""))
+    if not token:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = verify_token(token)
+    if not user:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    return _effective_safety_config(user["user_id"])
+
+
+@app.post("/safety/config")
+async def set_safety_config_endpoint(request: Request):
+    """Update per-user safety config overrides."""
+    token = extract_token(request.headers.get("authorization", ""))
+    if not token:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = verify_token(token)
+    if not user:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    overrides = set_safety_config(user["user_id"], body)
+    effective = _effective_safety_config(user["user_id"])
+
+    # Update the live governor with new config
+    governor.apply_user_config(user["user_id"], effective)
+
+    log.info(f"Safety config updated for user {user['user_id']}: {overrides}")
+    return effective
+
+
+@app.get("/safety/status")
+async def safety_status(request: Request):
+    """Get current governor state for the authenticated user."""
+    token = extract_token(request.headers.get("authorization", ""))
+    if not token:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = verify_token(token)
+    if not user:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    state = governor.get_state(user["user_id"])
+    state["config"] = _effective_safety_config(user["user_id"])
+    return state
+
+
+# ════════════════════════════════════════════════════════════════════════
 # Health & Status
 # ════════════════════════════════════════════════════════════════════════
 
@@ -487,8 +580,10 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "auth": "/auth/register, /auth/login",
+            "oauth": "/.well-known/oauth-authorization-server, /oauth/register, /oauth/authorize, /oauth/token",
             "mcp": "/mcp (POST, JSON-RPC)",
             "phone_relay": "/ws/phone (WebSocket)",
+            "safety": "/safety/config (GET, POST), /safety/status (GET)",
             "health": "/health",
         },
     }

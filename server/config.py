@@ -19,6 +19,7 @@ CORS_ORIGINS = os.getenv("SB_CORS_ORIGINS", "*").split(",")
 # ── Auth ────────────────────────────────────────────────────────────────
 TOKEN_EXPIRY_HOURS = int(os.getenv("SB_TOKEN_EXPIRY_HOURS", "168"))  # 1 week
 REGISTRATION_OPEN = os.getenv("SB_REGISTRATION_OPEN", "true").lower() == "true"
+REQUIRE_MCP_AUTH = os.getenv("SB_REQUIRE_MCP_AUTH", "false").lower() == "true"
 
 # ── Rate Limiting ───────────────────────────────────────────────────────
 # Format: "count/period" — e.g. "5/minute", "100/hour"
@@ -32,6 +33,16 @@ BAN_DURATION_MINUTES = int(os.getenv("SB_BAN_DURATION_MINUTES", "30"))
 # ── Safety ──────────────────────────────────────────────────────────────
 HEARTBEAT_INTERVAL_S = float(os.getenv("SB_HEARTBEAT_INTERVAL", "2.0"))
 HEARTBEAT_TIMEOUT_S = float(os.getenv("SB_HEARTBEAT_TIMEOUT", "6.0"))
+
+# ── Governor (session intensity limiter) ───────────────────────────────
+# Heat accumulates based on intensity × time, dissipates when idle.
+# Cooldown triggers when heat reaches threshold, exits at the floor.
+GOVERNOR_ENABLED = os.getenv("SB_GOVERNOR_ENABLED", "true").lower() == "true"
+GOVERNOR_HEAT_RATE = float(os.getenv("SB_GOVERNOR_HEAT_RATE", "3.0"))        # heat units/sec at intensity=1.0
+GOVERNOR_COOL_RATE = float(os.getenv("SB_GOVERNOR_COOL_RATE", "2.0"))        # heat units/sec dissipation when idle
+GOVERNOR_COOLDOWN_THRESHOLD = float(os.getenv("SB_GOVERNOR_COOLDOWN_ENTER", "90.0"))  # heat% to trigger cooldown
+GOVERNOR_COOLDOWN_EXIT = float(os.getenv("SB_GOVERNOR_COOLDOWN_EXIT", "30.0"))        # heat% to exit cooldown
+GOVERNOR_COOLDOWN_DURATION = float(os.getenv("SB_GOVERNOR_COOLDOWN_DURATION", "30.0"))  # min seconds in cooldown
 
 # ── Database ────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("SB_DB_PATH", str(Path(__file__).parent / "signal_bridge.db"))

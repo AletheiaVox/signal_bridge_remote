@@ -14,6 +14,7 @@ import logging
 import time
 
 from . import config
+from .governor import governor
 from .session_registry import registry
 
 log = logging.getLogger("signal_bridge.safety")
@@ -70,8 +71,15 @@ class DeadManSwitch:
         sessions = await registry.get_all_sessions()
 
         for user_id, session in sessions.items():
-            # Send ping
-            ping = {"type": "heartbeat_ping", "timestamp": now}
+            # Tick the governor (advances heat model)
+            governor.tick(user_id)
+
+            # Send ping with governor state piggybacked
+            ping = {
+                "type": "heartbeat_ping",
+                "timestamp": now,
+                **governor.get_state(user_id),
+            }
             try:
                 await session.websocket.send(json.dumps(ping))
             except Exception:
@@ -92,6 +100,8 @@ class DeadManSwitch:
     async def _emergency_stop(self, user_id: str, session):
         """Send stop-all and disconnect the session."""
         log.critical(f"EMERGENCY STOP for user {user_id} — all devices halted")
+        governor.record_stop(user_id)
+
         try:
             stop_cmd = {"type": "stop", "device": "all", "emergency": True}
             await session.websocket.send(json.dumps(stop_cmd))
@@ -104,6 +114,7 @@ class DeadManSwitch:
             pass
 
         await registry.unregister(user_id)
+        governor.remove_user(user_id)
 
 
 # Singleton

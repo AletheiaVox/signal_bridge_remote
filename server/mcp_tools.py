@@ -24,6 +24,7 @@ from .models import (
     DeviceCommand, PatternCommand, StopCommand, ScanCommand, ReadSensorCommand,
     CommandAck,
 )
+from .governor import governor
 from .session_registry import registry
 
 # Set by auth middleware before each MCP request
@@ -66,10 +67,30 @@ def _register_tool(name: str, description: str, params: dict, required: list[str
 # Helper
 # ════════════════════════════════════════════════════════════════════════
 
-async def _send(command: dict) -> str:
-    """Route a command to the current user's phone and return result text."""
+async def _send(command: dict, intensity: float = 0.0) -> str:
+    """
+    Route a command to the current user's phone and return result text.
+
+    If intensity > 0, the governor checks if the command is allowed
+    and records the intensity for heat tracking.
+    """
     user_id = current_user_id.get()
+
+    # Governor check (skip for stop commands and scans)
+    cmd_type = command.get("type", "")
+    if cmd_type not in ("stop", "scan") and intensity > 0:
+        allowed, reason = governor.check(user_id)
+        if not allowed:
+            return f"Blocked by governor: {reason}"
+
     ack = await registry.send_to_user(user_id, command)
+
+    # Record intensity for heat tracking
+    if ack.success and intensity > 0:
+        governor.record_command(user_id, intensity)
+    elif ack.success and cmd_type == "stop":
+        governor.record_stop(user_id)
+
     if ack.success:
         return ack.message or "OK"
     else:
@@ -126,6 +147,17 @@ async def list_devices(**kwargs) -> str:
             + (f" | floor: {floor}" if floor > 0 else "")
             + (f" | {notes}" if notes else "")
         )
+
+    # Append governor state so Claude knows the session budget
+    gov = governor.get_state(user_id)
+    heat = gov["heat_pct"]
+    if gov["in_cooldown"]:
+        lines.append(f"\n⚠ Governor: COOLDOWN ({gov['cooldown_remaining']}s remaining)")
+    elif heat > 0:
+        lines.append(f"\nGovernor: {heat:.0f}% heat"
+                     + (f" (~{gov['predicted_seconds']}s to cooldown)"
+                        if gov["predicted_seconds"] is not None else ""))
+
     return "\n".join(lines)
 
 
@@ -166,13 +198,14 @@ def _make_output_handler(output_type: OutputType):
     async def handler(
         device: str = "all", intensity: float = 0.5, duration: float = 0, **kw
     ) -> str:
+        clamped = max(0.0, min(1.0, float(intensity)))
         cmd = DeviceCommand(
             action=output_type,
             device=device,
-            intensity=max(0.0, min(1.0, intensity)),
-            duration=max(0.0, duration),
+            intensity=clamped,
+            duration=max(0.0, float(duration)),
         )
-        return await _send(cmd.model_dump())
+        return await _send(cmd.model_dump(), intensity=clamped)
     return handler
 
 
@@ -290,15 +323,16 @@ def _make_pattern_handler(pattern_name: str):
         hold_seconds: float = 0,
         **kw,
     ) -> str:
+        clamped = max(0.0, min(1.0, float(intensity)))
         cmd = PatternCommand(
             pattern=pattern_name,
             output_type=OutputType(output_type),
             device=device,
-            intensity=max(0.0, min(1.0, intensity)),
-            duration=max(0.0, duration),
-            hold_seconds=max(0.0, hold_seconds),
+            intensity=clamped,
+            duration=max(0.0, float(duration)),
+            hold_seconds=max(0.0, float(hold_seconds)),
         )
-        return await _send(cmd.model_dump())
+        return await _send(cmd.model_dump(), intensity=clamped)
     return handler
 
 
