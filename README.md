@@ -90,15 +90,19 @@ On your local machine, create the project directory and prepare files. The proje
 signal-bridge-remote/
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env
+├── .env                  (copy .env.example and fill in)
 ├── requirements-server.txt
+├── requirements-phone.txt
 ├── server/
 │   ├── __init__.py
 │   ├── app.py
 │   ├── auth.py
 │   ├── config.py
+│   ├── governor.py
 │   ├── models.py
 │   ├── mcp_tools.py
+│   ├── oauth.py
+│   ├── oauth_routes.py
 │   ├── relay_hub.py
 │   ├── safety.py
 │   └── session_registry.py
@@ -147,6 +151,7 @@ websockets>=12.0
 bcrypt>=4.1.0
 PyJWT>=2.8.0
 python-dotenv>=1.0.0
+python-multipart>=0.0.9
 ```
 
 **.env:**
@@ -158,11 +163,19 @@ SB_HOST=0.0.0.0
 SB_PORT=8420
 SB_REGISTRATION_OPEN=true
 SB_TOKEN_EXPIRY_HOURS=720
+# true = every MCP request must be authenticated (multi-user servers).
+# false = single-user convenience: unauthenticated MCP requests go to the
+# sole connected phone.
+SB_REQUIRE_MCP_AUTH=false
 SB_HEARTBEAT_INTERVAL=2.0
 SB_HEARTBEAT_TIMEOUT=6.0
 SB_BAN_THRESHOLD=20
 SB_BAN_DURATION_MINUTES=30
 ```
+
+See [.env.example](.env.example) for the full list, including the safety
+governor's tuning knobs (`SB_GOVERNOR_*` — heat/cooldown rates for the
+session intensity limiter).
 
 Upload to your VPS:
 
@@ -290,17 +303,21 @@ Add this MCP server config:
 
 Restart Claude Desktop. You should see Signal Bridge in your available tools.
 
-### Option B: claude.ai Custom Connector (authless)
+### Option B: claude.ai Custom Connector (OAuth)
 
-Claude.ai supports custom MCP connectors without authentication, using a fallback mechanism: when only one phone is connected, all MCP requests are routed to that phone automatically.
+The server implements the full OAuth 2.0 flow that claude.ai custom connectors expect (discovery metadata, dynamic client registration, authorize + token endpoints). Each user logs in with their own Signal Bridge account, so this works properly on multi-user servers.
 
 1. Go to claude.ai Settings (or click the connector icon in the chat)
 2. Choose "Add custom connector" (or "Add MCP server")
 3. Enter your server URL: `https://signal-bridge.duckdns.org/mcp`
-4. Leave authentication as "None"
-5. Save
+4. Save — claude.ai will open your server's login page
+5. Sign in with the username and password you registered in step 1.4
 
-**Important**: The authless fallback only works when exactly one phone/relay client is connected to the server. If no phones are connected, claude.ai will show a connection error. Start your relay client first, then connect from claude.ai.
+### Option C: claude.ai without login (single-user fallback)
+
+If you skip the OAuth login, the server falls back to routing unauthenticated MCP requests to the sole connected phone — convenient for a private single-user server.
+
+**Important**: The authless fallback only works when exactly one phone/relay client is connected to the server (and is disabled entirely when `SB_REQUIRE_MCP_AUTH=true`). If no phones are connected, claude.ai will show a connection error. Start your relay client first, then connect from claude.ai.
 
 ---
 
@@ -466,18 +483,19 @@ Once connected, Claude has access to these tools:
 
 | Tool | Description |
 |------|-------------|
-| `list_devices` | Show connected devices and their capabilities |
+| `list_devices` | Show connected devices, their output channels, and governor state |
 | `scan_devices` | Rescan for new or reconnected Bluetooth devices |
 | `vibrate` | Send vibration (intensity 0.0–1.0, optional duration in seconds) |
-| `rotate` | Rotation or sonic output (device-dependent) |
-| `oscillate` | Thrusting/oscillation output |
+| `rotate` | Rotational/high-frequency actuator output (device-dependent) |
+| `oscillate` | Linear reciprocating output |
+| `constrict` / `temperature` / `led` / `position` / `spray` | Extended outputs for devices that support them |
 | `pulse` | Rhythmic on/off pattern |
 | `wave` | Smooth sine-wave intensity modulation |
-| `escalate` | Gradual ramp from 0 to peak, with optional hold |
+| `escalate` | Gradual ramp to peak; `hold_seconds` > 0 auto-stops after holding, 0 holds until stopped |
 | `stop` | Immediately stop all output (also cancels patterns) |
 | `read_battery` | Read device battery level |
 
-All output tools accept `device` (name or "all"), `intensity` (0.0–1.0), and `duration` (seconds, 0 = until stopped). Pattern tools also accept `output_type` to modulate rotation or oscillation instead of vibration.
+All output tools accept `device` (name or "all"), `intensity` (0.0–1.0), and `duration` (seconds, 0 = until stopped). Pattern tools also accept `output_type` to modulate rotation or oscillation instead of vibration. Multi-motor devices (e.g. Lovense Edge, Dolce) additionally take `feature_index` to drive one motor independently — omit it to drive all matching motors together.
 
 ---
 
@@ -486,6 +504,7 @@ All output tools accept `device` (name or "all"), `intensity` (0.0–1.0), and `
 Signal Bridge has several safety mechanisms built in:
 
 - **Dead Man's Switch**: The server pings the relay client every 2 seconds. If 3 pings go unanswered (6 seconds), the server sends an emergency stop to all devices and disconnects the session. Your devices will never be left running if the connection drops.
+- **Safety Governor**: A server-side heat model (intensity × time) that forces a cooldown when a session runs too hot for too long. Tunable server-wide via `SB_GOVERNOR_*` env vars and per-user via `GET`/`POST /safety/config`; current heat is shown in `list_devices` and can be disabled per user.
 - **Auto-stop on Duration**: Commands with a `duration` parameter automatically stop after the specified time.
 - **Fallback Stop**: If a stop command references a device name that doesn't exist, ALL devices are stopped as a safety fallback.
 - **Rate Limiting**: Prevents command flooding (120 commands/minute default).
