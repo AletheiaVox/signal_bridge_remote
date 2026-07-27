@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Disabling the governor now disables the governor.** `enabled` gated only
+  `Governor.check()` — the enforcement call. The heat model kept integrating
+  on every heartbeat, the state kept riding along on heartbeat pings, and
+  `list_devices` kept appending a heat/cooldown footer. With the governor
+  switched off, a session could still surface `⚠ Governor: COOLDOWN` and
+  transition the phone's own state machine to COOLDOWN while nothing was
+  being blocked at all — a disabled safety layer announcing a stop it would
+  never enforce. `tick()` now returns early when disabled and clears any
+  state carried over from before the toggle; `to_dict()` reports
+  `enabled: false` with zeroed values; the `list_devices` footer is omitted
+  entirely.
+- **Timed commands no longer accumulate heat forever.** `current_intensity`
+  was cleared only by `record_stop()`, which has three callers: an explicit
+  `stop`, a phone-initiated emergency stop, and the dead man's switch. A
+  pattern that ended on its own declared duration never told the server, so
+  the heat model went on integrating at the last commanded intensity against
+  hardware that had already stopped — indefinitely. Commands now carry their
+  duration into `record_command()` and the intensity expires when it lapses.
+  `duration: 0` still means "runs until an explicit stop" and stays sticky.
+  For `escalate`, the expiry is `duration + hold_seconds`, and only when
+  `hold_seconds > 0` — with `hold_seconds: 0` it holds at peak indefinitely
+  by contract.
+
+### Added
+
+- `tests/verify_governor.py` — offline verification of the heat model:
+  the disabled path, timed-command expiry, and the enabled-path invariants
+  (cooldown trigger, cooldown exit on both heat and time, idle dissipation).
+  Pure logic, no server or hardware. `python tests/verify_governor.py`
+- `enabled` is now included in the governor state dict, so heartbeat
+  consumers and `/safety/status` can tell a quiet governor from an absent
+  one. Existing phone clients read heartbeat fields by key lookup and ignore
+  unknown ones, so no client update is required.
+
 ## v1.1 — 2026-07-07
 
 This release brings the remote server up to date with everything that

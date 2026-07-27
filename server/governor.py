@@ -45,6 +45,7 @@ class GovernorState:
     """Per-user heat tracking state."""
     heat: float = 0.0               # 0..100
     current_intensity: float = 0.0  # last known intensity (0..1)
+    intensity_expires_at: float = 0.0  # 0 = runs until an explicit stop
     in_cooldown: bool = False
     cooldown_entered_at: float = 0.0
     cooldown_count: int = 0         # total cooldowns this session
@@ -57,9 +58,27 @@ class GovernorState:
         dt = now - self.last_tick
         self.last_tick = now
 
+        if not self.cfg.enabled:
+            # Disabled means the whole subsystem is off, not just enforcement.
+            # Clear anything left over from before the toggle so no stale heat
+            # or cooldown is reported to the AI or acted on by the phone.
+            if self.heat or self.in_cooldown or self.current_intensity:
+                self.heat = 0.0
+                self.in_cooldown = False
+                self.current_intensity = 0.0
+                self.intensity_expires_at = 0.0
+            return
+
         if dt <= 0 or dt > 10:
             # Sanity: skip huge jumps (e.g., system clock change)
             return
+
+        # A command with a declared duration stops on its own; the phone never
+        # reports that, so expire it here. Without this, current_intensity is
+        # sticky forever and heat integrates against hardware sitting idle.
+        if self.intensity_expires_at and now >= self.intensity_expires_at:
+            self.current_intensity = 0.0
+            self.intensity_expires_at = 0.0
 
         if self.in_cooldown:
             # During cooldown: always dissipate, intensity is forced to 0
@@ -91,18 +110,29 @@ class GovernorState:
                 self.cooldown_entered_at = now
                 self.cooldown_count += 1
                 self.current_intensity = 0.0
+                self.intensity_expires_at = 0.0
                 log.warning(
                     f"Cooldown triggered: heat={self.heat:.1f}% "
                     f"(cooldown #{self.cooldown_count})"
                 )
 
-    def record_command(self, intensity: float) -> None:
-        """Record that a command was sent at a given intensity."""
+    def record_command(self, intensity: float, duration: float = 0.0) -> None:
+        """
+        Record that a command was sent at a given intensity.
+
+        `duration` is how long the command runs before the phone stops it on
+        its own. 0 means it runs until an explicit stop, which is the only
+        case where the intensity should stay set indefinitely.
+        """
         self.current_intensity = max(0.0, min(1.0, intensity))
+        self.intensity_expires_at = (
+            time.time() + duration if duration > 0 else 0.0
+        )
 
     def record_stop(self) -> None:
         """Record that devices were stopped."""
         self.current_intensity = 0.0
+        self.intensity_expires_at = 0.0
 
     @property
     def cooldown_remaining(self) -> int:
@@ -142,7 +172,21 @@ class GovernorState:
 
     def to_dict(self) -> dict:
         """Serialize for piggybacking on heartbeat pings."""
+        if not self.cfg.enabled:
+            # Report nothing rather than stale numbers. A disabled governor
+            # must never put a cooldown on the wire — the phone drives its own
+            # ACTIVE→COOLDOWN state machine off in_cooldown, and the AI reads
+            # the list_devices footer as if it meant something.
+            return {
+                "enabled": False,
+                "heat_pct": 0.0,
+                "in_cooldown": False,
+                "cooldown_remaining": 0,
+                "cooldown_count": self.cooldown_count,
+                "predicted_seconds": None,
+            }
         return {
+            "enabled": True,
             "heat_pct": round(self.heat, 1),
             "in_cooldown": self.in_cooldown,
             "cooldown_remaining": self.cooldown_remaining,
@@ -207,9 +251,11 @@ class Governor:
         log.info(f"Applied user config for {user_id}: heat_rate={state.cfg.heat_rate}, "
                  f"cool_rate={state.cfg.cool_rate}, threshold={state.cfg.cooldown_threshold}")
 
-    def record_command(self, user_id: str, intensity: float) -> None:
+    def record_command(
+        self, user_id: str, intensity: float, duration: float = 0.0
+    ) -> None:
         """Record that a command was dispatched."""
-        self._get(user_id).record_command(intensity)
+        self._get(user_id).record_command(intensity, duration)
 
     def record_stop(self, user_id: str) -> None:
         """Record that devices were stopped."""

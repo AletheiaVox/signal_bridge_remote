@@ -67,12 +67,18 @@ def _register_tool(name: str, description: str, params: dict, required: list[str
 # Helper
 # ════════════════════════════════════════════════════════════════════════
 
-async def _send(command: dict, intensity: float = 0.0) -> str:
+async def _send(
+    command: dict, intensity: float = 0.0, duration: float = 0.0
+) -> str:
     """
     Route a command to the current user's phone and return result text.
 
     If intensity > 0, the governor checks if the command is allowed
     and records the intensity for heat tracking.
+
+    `duration` is how long the command runs before the phone stops it by
+    itself. Pass it so the heat model can expire the intensity; 0 means the
+    command runs until an explicit stop.
     """
     user_id = current_user_id.get()
 
@@ -87,7 +93,7 @@ async def _send(command: dict, intensity: float = 0.0) -> str:
 
     # Record intensity for heat tracking
     if ack.success and intensity > 0:
-        governor.record_command(user_id, intensity)
+        governor.record_command(user_id, intensity, duration)
     elif ack.success and cmd_type == "stop":
         governor.record_stop(user_id)
 
@@ -152,10 +158,14 @@ async def list_devices(**kwargs) -> str:
             + (f" | {notes}" if notes else "")
         )
 
-    # Append governor state so AI knows the session budget
+    # Append governor state so AI knows the session budget.
+    # Say nothing at all when the governor is off — a disabled subsystem must
+    # not report a limit it will never enforce.
     gov = governor.get_state(user_id)
     heat = gov["heat_pct"]
-    if gov["in_cooldown"]:
+    if not gov.get("enabled", True):
+        pass
+    elif gov["in_cooldown"]:
         lines.append(f"\n⚠ Governor: COOLDOWN ({gov['cooldown_remaining']}s remaining)")
     elif heat > 0:
         lines.append(f"\nGovernor: {heat:.0f}% heat"
@@ -212,14 +222,15 @@ def _make_output_handler(output_type: OutputType):
         feature_index: Optional[int] = None, **kw
     ) -> str:
         clamped = max(0.0, min(1.0, float(intensity)))
+        dur = max(0.0, float(duration))
         cmd = DeviceCommand(
             action=output_type,
             device=device,
             intensity=clamped,
-            duration=max(0.0, float(duration)),
+            duration=dur,
             feature_index=feature_index,
         )
-        return await _send(cmd.model_dump(), intensity=clamped)
+        return await _send(cmd.model_dump(), intensity=clamped, duration=dur)
     return handler
 
 
@@ -355,16 +366,28 @@ def _make_pattern_handler(pattern_name: str):
         **kw,
     ) -> str:
         clamped = max(0.0, min(1.0, float(intensity)))
+        dur = max(0.0, float(duration))
+        hold = max(0.0, float(hold_seconds))
         cmd = PatternCommand(
             pattern=pattern_name,
             output_type=OutputType(output_type),
             device=device,
             intensity=clamped,
-            duration=max(0.0, float(duration)),
-            hold_seconds=max(0.0, float(hold_seconds)),
+            duration=dur,
+            hold_seconds=hold,
             feature_index=feature_index,
         )
-        return await _send(cmd.model_dump(), intensity=clamped)
+        # How long before the phone stops this by itself. escalate ramps over
+        # `duration` and then holds — indefinitely unless hold_seconds is set,
+        # which is the one case where it auto-stops. Every other pattern runs
+        # for `duration` and ends. 0 means "until an explicit stop".
+        if pattern_name == "escalate":
+            effective = (dur + hold) if hold > 0 else 0.0
+        else:
+            effective = dur
+        return await _send(
+            cmd.model_dump(), intensity=clamped, duration=effective
+        )
     return handler
 
 
